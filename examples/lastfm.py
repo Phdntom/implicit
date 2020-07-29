@@ -10,17 +10,18 @@ import argparse
 import codecs
 import logging
 import time
-import tqdm
 
 import numpy as np
+import tqdm
 
 from implicit.als import AlternatingLeastSquares
 from implicit.approximate_als import (AnnoyAlternatingLeastSquares, FaissAlternatingLeastSquares,
                                       NMSLibAlternatingLeastSquares)
 from implicit.bpr import BayesianPersonalizedRanking
+from implicit.datasets.lastfm import get_lastfm
+from implicit.lmf import LogisticMatrixFactorization
 from implicit.nearest_neighbours import (BM25Recommender, CosineRecommender,
                                          TFIDFRecommender, bm25_weight)
-from implicit.datasets.lastfm import get_lastfm
 
 # maps command line model argument to class name
 MODELS = {"als":  AlternatingLeastSquares,
@@ -30,6 +31,7 @@ MODELS = {"als":  AlternatingLeastSquares,
           "tfidf": TFIDFRecommender,
           "cosine": CosineRecommender,
           "bpr": BayesianPersonalizedRanking,
+          "lmf": LogisticMatrixFactorization,
           "bm25": BM25Recommender}
 
 
@@ -46,6 +48,8 @@ def get_model(model_name):
         params = {'K1': 100, 'B': 0.5}
     elif model_name == "bpr":
         params = {'factors': 63}
+    elif model_name == "lmf":
+        params = {'factors': 30, "iterations": 40, "regularization": 1.5}
     else:
         params = {}
 
@@ -53,7 +57,7 @@ def get_model(model_name):
 
 
 def calculate_similar_artists(output_filename, model_name="als"):
-    """ generates a list of similar artists in lastfm by utiliizing the 'similar_items'
+    """ generates a list of similar artists in lastfm by utilizing the 'similar_items'
     api of the models """
     artists, users, plays = get_lastfm()
 

@@ -3,17 +3,17 @@ import functools
 import heapq
 import logging
 import time
-import tqdm
 
 import numpy as np
 import scipy
 import scipy.sparse
+from tqdm.auto import tqdm
 
 import implicit.cuda
 
 from . import _als
 from .recommender_base import MatrixFactorizationBase
-from .utils import check_blas_config, nonzeros
+from .utils import check_blas_config, check_random_state, nonzeros
 
 log = logging.getLogger("implicit")
 
@@ -49,6 +49,9 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
         The number of threads to use for fitting the model. This only
         applies for the native extensions. Specifying 0 means to default
         to the number of cores on the machine.
+    random_state : int, RandomState or None, optional
+        The random state for seeding the initial item and user factors.
+        Default is None.
 
     Attributes
     ----------
@@ -60,7 +63,9 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
 
     def __init__(self, factors=100, regularization=0.01, dtype=np.float32,
                  use_native=True, use_cg=True, use_gpu=implicit.cuda.HAS_CUDA,
-                 iterations=15, calculate_training_loss=False, num_threads=0):
+                 iterations=15, calculate_training_loss=False, num_threads=0,
+                 random_state=None):
+
         super(AlternatingLeastSquares, self).__init__()
 
         # currently there are some issues when training on the GPU when some of the warps
@@ -87,6 +92,7 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
         self.num_threads = num_threads
         self.fit_callback = None
         self.cg_steps = 3
+        self.random_state = random_state
 
         # cache for item factors squared
         self._YtY = None
@@ -103,9 +109,11 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
         users (P_iu in the original paper), as well as how much confidence we have that the user
         liked the item (C_iu).
 
-        The negative items are implicitly defined: This code assumes that non-zero items in the
+        The negative items are implicitly defined: This code assumes that positive items in the
         item_users matrix means that the user liked the item. The negatives are left unset in this
         sparse matrix: the library will assume that means Piu = 0 and Ciu = 1 for all these items.
+        Negative items can also be passed with a higher confidence value by passing a negative
+        value, indicating that the user disliked the item.
 
         Parameters
         ----------
@@ -116,6 +124,9 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
         show_progress : bool, optional
             Whether to show a progress bar during fitting
         """
+        # initialize the random state
+        random_state = check_random_state(self.random_state)
+
         Ciu = item_users
         if not isinstance(Ciu, scipy.sparse.csr_matrix):
             s = time.time()
@@ -135,9 +146,9 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
         s = time.time()
         # Initialize the variables randomly if they haven't already been set
         if self.user_factors is None:
-            self.user_factors = np.random.rand(users, self.factors).astype(self.dtype) * 0.01
+            self.user_factors = random_state.rand(users, self.factors).astype(self.dtype) * 0.01
         if self.item_factors is None:
-            self.item_factors = np.random.rand(items, self.factors).astype(self.dtype) * 0.01
+            self.item_factors = random_state.rand(items, self.factors).astype(self.dtype) * 0.01
 
         log.debug("Initialized factors in %s", time.time() - s)
 
@@ -151,17 +162,15 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
         solver = self.solver
 
         log.debug("Running %i ALS iterations", self.iterations)
-        with tqdm.tqdm(total=self.iterations, disable=not show_progress) as progress:
+        with tqdm(total=self.iterations, disable=not show_progress) as progress:
             # alternate between learning the user_factors from the item_factors and vice-versa
             for iteration in range(self.iterations):
                 s = time.time()
                 solver(Cui, self.user_factors, self.item_factors, self.regularization,
                        num_threads=self.num_threads)
-                progress.update(.5)
-
                 solver(Ciu, self.item_factors, self.user_factors, self.regularization,
                        num_threads=self.num_threads)
-                progress.update(.5)
+                progress.update(1)
 
                 if self.calculate_training_loss:
                     loss = _als.calculate_loss(Cui, self.user_factors, self.item_factors,
@@ -192,13 +201,12 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
 
         solver = implicit.cuda.CuLeastSquaresSolver(self.factors)
         log.debug("Running %i ALS iterations", self.iterations)
-        with tqdm.tqdm(total=self.iterations, disable=not show_progress) as progress:
+        with tqdm(total=self.iterations, disable=not show_progress) as progress:
             for iteration in range(self.iterations):
                 s = time.time()
                 solver.least_squares(Cui, X, Y, self.regularization, self.cg_steps)
-                progress.update(.5)
                 solver.least_squares(Ciu, Y, X, self.regularization, self.cg_steps)
-                progress.update(.5)
+                progress.update(1)
 
                 if self.fit_callback:
                     self.fit_callback(iteration, time.time() - s)
@@ -261,7 +269,8 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
 
         total_score = 0.0
         h = []
-        for i, (itemid, confidence) in enumerate(nonzeros(user_items, userid)):
+        h_len = 0
+        for itemid, confidence in nonzeros(user_items, userid):
             if confidence < 0:
                 continue
 
@@ -270,8 +279,9 @@ class AlternatingLeastSquares(MatrixFactorizationBase):
             score = weighted_item.dot(factor) * confidence
             total_score += score
             contribution = (score, itemid)
-            if i < N:
+            if h_len < N:
                 heapq.heappush(h, contribution)
+                h_len += 1
             else:
                 heapq.heappushpop(h, contribution)
 

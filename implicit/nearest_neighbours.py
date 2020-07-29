@@ -4,7 +4,7 @@ import numpy
 from numpy import bincount, log, log1p, sqrt
 from scipy.sparse import coo_matrix, csr_matrix
 
-from ._nearest_neighbours import all_pairs_knn, NearestNeighboursScorer
+from ._nearest_neighbours import NearestNeighboursScorer, all_pairs_knn
 from .recommender_base import RecommenderBase
 from .utils import nonzeros
 
@@ -86,6 +86,19 @@ class ItemItemRecommender(RecommenderBase):
             return []
 
         return sorted(list(nonzeros(self.similarity, itemid)), key=lambda x: -x[1])[:N]
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # scorer isn't picklable
+        del state['scorer']
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if self.similarity is not None:
+            self.scorer = NearestNeighboursScorer(self.similarity)
+        else:
+            self.scorer = None
 
     def save(self, filename):
         m = self.similarity

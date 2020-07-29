@@ -16,17 +16,16 @@ import argparse
 import codecs
 import logging
 import time
-import tqdm
 
 import numpy as np
+import tqdm
 
 from implicit.als import AlternatingLeastSquares
 from implicit.bpr import BayesianPersonalizedRanking
+from implicit.datasets.movielens import get_movielens
+from implicit.lmf import LogisticMatrixFactorization
 from implicit.nearest_neighbours import (BM25Recommender, CosineRecommender,
                                          TFIDFRecommender, bm25_weight)
-
-from implicit.datasets.movielens import get_movielens
-
 
 log = logging.getLogger("implicit")
 
@@ -52,10 +51,13 @@ def calculate_similar_movies(output_filename,
 
         # lets weight these models by bm25weight.
         log.debug("weighting matrix by bm25_weight")
-        ratings = (bm25_weight(ratings,  B=0.9) * 5).tocsr()
+        ratings = (bm25_weight(ratings, B=0.9) * 5).tocsr()
 
     elif model_name == "bpr":
         model = BayesianPersonalizedRanking()
+
+    elif model_name == "lmf":
+        model = LogisticMatrixFactorization()
 
     elif model_name == "tfidf":
         model = TFIDFRecommender()

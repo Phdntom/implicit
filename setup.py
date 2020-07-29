@@ -1,4 +1,5 @@
 import glob
+import io
 import logging
 import os.path
 import platform
@@ -10,7 +11,7 @@ from cuda_setup import CUDA, build_ext
 
 
 NAME = 'implicit'
-VERSION = "0.3.8"
+VERSION = "0.4.0"
 
 try:
     from Cython.Build import cythonize
@@ -47,12 +48,25 @@ def define_extensions(use_cython=False):
         compile_args.append("-std=c++11")
         link_args.append("-std=c++11")
 
+    # we need numpy to build so we can include the arrayobject.h in the .cpp builds
+    # try:
+    #     import numpy as np
+    # except ImportError:
+    #     raise ValueError("numpy is required to build from source")
+
     src_ext = '.pyx' if use_cython else '.cpp'
     modules = [Extension("implicit." + name,
                          [os.path.join("implicit", name + src_ext)],
                          language='c++',
-                         extra_compile_args=compile_args, extra_link_args=link_args)
-               for name in ['_als', '_nearest_neighbours', 'bpr', 'evaluation']]
+                         extra_compile_args=compile_args,
+                         extra_link_args=link_args)
+               for name in ['_als', '_nearest_neighbours', 'bpr', 'lmf', 'evaluation']]
+    modules.append(Extension("implicit." + 'recommender_base',
+                             [os.path.join("implicit", 'recommender_base' + src_ext),
+                              os.path.join("implicit", 'topnc.cpp')],
+                             language='c++',
+                             extra_compile_args=compile_args,
+                             extra_link_args=link_args))
 
     if CUDA:
         modules.append(Extension("implicit.cuda._cuda",
@@ -84,7 +98,7 @@ def extract_gcc_binaries():
                 '/opt/local/bin/g++-mp-[0-9]',
                 '/usr/local/bin/g++-[0-9].[0-9]',
                 '/usr/local/bin/g++-[0-9]']
-    if 'darwin' in platform.platform().lower():
+    if platform.system() == 'Darwin':
         gcc_binaries = []
         for pattern in patterns:
             gcc_binaries += glob.glob(pattern)
@@ -101,8 +115,7 @@ def extract_gcc_binaries():
 def set_gcc():
     """Try to use GCC on OSX for OpenMP support."""
     # For macports and homebrew
-
-    if 'darwin' in platform.platform().lower():
+    if platform.system() == 'Darwin':
         gcc = extract_gcc_binaries()
 
         if gcc is not None:
@@ -118,19 +131,20 @@ def set_gcc():
 
 set_gcc()
 
-try:
-    # if we don't have pandoc installed, don't worry about it
-    import pypandoc
-    long_description = pypandoc.convert_file("README.md", "rst")
-except ImportError:
-    long_description = ''
+
+def read(file_name):
+    """Read a text file and return the content as a string."""
+    file_path = os.path.join(os.path.dirname(__file__), file_name)
+    with io.open(file_path, encoding="utf-8") as f:
+        return f.read()
 
 
 setup(
     name=NAME,
     version=VERSION,
     description='Collaborative Filtering for Implicit Datasets',
-    long_description=long_description,
+    long_description=read("README.md"),
+    long_description_content_type="text/markdown",
     url='http://github.com/benfred/implicit/',
     author='Ben Frederickson',
     author_email='ben@benfrederickson.com',
@@ -151,7 +165,7 @@ setup(
              'Collaborative Filtering, Recommender Systems',
 
     packages=find_packages(),
-    install_requires=['numpy', 'scipy>=0.16', 'tqdm'],
+    install_requires=['numpy', 'scipy>=0.16', 'tqdm>=4.27'],
     setup_requires=["Cython>=0.24"],
     ext_modules=define_extensions(use_cython),
     cmdclass={'build_ext': build_ext},
